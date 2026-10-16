@@ -6,7 +6,7 @@ namespace FuckCalibri
     internal static class Constants
     {
         public const string AppName = "FuckCalibri.net";
-        public const string AppVersion = "2.0.0";
+        public const string AppVersion = "2.0.1";
         public const string ProjectUrl = "https://github.com/Marukon/FuckCalibri.net";
         public const string UpstreamUrl = "https://github.com/zhmjx/FuckCalibri";
         public const string DotnetRepoUrl = "https://github.com/he1a2s0/FuckCalibri.net";

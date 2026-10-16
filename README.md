@@ -1,4 +1,4 @@
-# FuckCalibri.net 2.0
+# FuckCalibri.net 2.0.1
 
 > **Microsoft OneNote 强制 Calibri 字体拦截工具**  
 > 基于 **.NET 10** 与 **WPF-UI (Fluent 2)** 现代化重构升级，采用独立单文件绿色发布。
@@ -57,6 +57,10 @@
 
 ### 8. 专精 OneNote 桌面版
 - 彻底移除已被微软官方废弃停更的 OneNote for Windows 10 (UWP) 支持，专注服务 Microsoft 365 / Office 桌面版 OneNote (`ONENOTE.EXE`)。
+
+### 9. 进程生命周期与异常平滑容错 (v2.0.1)
+- **消除退出瞬态竞态**：优化 ShellHook 窗口事件与进程退出的微秒级竞态处理，对于已生效实例规避冗余的激活重扫；
+- **智能退避与状态流转**：在 OneNote 进程关闭退出（`ExitProcess`）时自动静默流转至待机状态，消除手动关闭 OneNote 时偶发的“内存访问权限不足 / 注入失败”误报弹窗。
 
 ---
 

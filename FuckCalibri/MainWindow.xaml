@@ -526,7 +526,7 @@
                                FontSize="11"
                                Foreground="#64748B"
                                Margin="0,0,10,0" />
-                    <TextBlock Text="FuckCalibri.net v2.0"
+                    <TextBlock Text="FuckCalibri.net v2.0.1"
                                FontSize="11"
                                Foreground="#94A3B8" />
                 </StackPanel>

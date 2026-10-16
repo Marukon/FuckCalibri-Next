@@ -36,6 +36,12 @@ namespace FuckCalibri.Services
                     WinApi.GetWindowThreadProcessId(hWnd, out uint pid);
                     if (pid > 0)
                     {
+                        // 若该实例已成功生效且 PID 一致，激活事件无需重复触发全量重扫，避免关闭窗口时的暂态激活竞争
+                        if (pid == _lastPatchedProcessId && _currentState.Status == PatchStatus.Patched)
+                        {
+                            return;
+                        }
+
                         try
                         {
                             using var proc = Process.GetProcessById((int)pid);
@@ -57,6 +63,19 @@ namespace FuckCalibri.Services
                     if (procs.Length == 0)
                     {
                         ScanAndPatchNow();
+                    }
+                    else
+                    {
+                        // OneNote 窗口销毁时可能仍在收尾退出，异步延迟复核一次以平滑更新状态
+                        Task.Run(async () =>
+                        {
+                            await Task.Delay(300);
+                            var remaining = Process.GetProcessesByName(Constants.TargetProcessName);
+                            if (remaining.Length == 0)
+                            {
+                                ScanAndPatchNow();
+                            }
+                        });
                     }
                 }
             }
@@ -162,6 +181,21 @@ namespace FuckCalibri.Services
             if (processHandle == IntPtr.Zero)
             {
                 var err = Marshal.GetLastWin32Error();
+
+                // 检查目标进程是否已退出或处于终止退出阶段（避免关闭进程时误报权限不足或打开失败）
+                if (IsProcessTerminatingOrExited(process))
+                {
+                    _lastPatchedProcessId = 0;
+                    var notRunningState = new PatchStateInfo
+                    {
+                        Status = PatchStatus.NotRunning,
+                        ProcessName = Constants.TargetProcessName,
+                        Message = "OneNote 未运行"
+                    };
+                    SetState(notRunningState);
+                    return notRunningState;
+                }
+
                 var accessDenied = err == 5;
                 var errorState = new PatchStateInfo
                 {
@@ -181,6 +215,21 @@ namespace FuckCalibri.Services
                 if (!WinApi.ReadProcessMemory(processHandle, moduleBaseAddress, buffer, size, ref numOfBytesRead))
                 {
                     var err = Marshal.GetLastWin32Error();
+
+                    // 检查目标进程是否在读取内存时已退出
+                    if (IsProcessTerminatingOrExited(process))
+                    {
+                        _lastPatchedProcessId = 0;
+                        var notRunningState = new PatchStateInfo
+                        {
+                            Status = PatchStatus.NotRunning,
+                            ProcessName = Constants.TargetProcessName,
+                            Message = "OneNote 未运行"
+                        };
+                        SetState(notRunningState);
+                        return notRunningState;
+                    }
+
                     var readFailState = new PatchStateInfo
                     {
                         Status = PatchStatus.Error,
@@ -276,6 +325,19 @@ namespace FuckCalibri.Services
                     }
                     else
                     {
+                        if (IsProcessTerminatingOrExited(process))
+                        {
+                            _lastPatchedProcessId = 0;
+                            var notRunningState = new PatchStateInfo
+                            {
+                                Status = PatchStatus.NotRunning,
+                                ProcessName = Constants.TargetProcessName,
+                                Message = "OneNote 未运行"
+                            };
+                            SetState(notRunningState);
+                            return notRunningState;
+                        }
+
                         // 既没有未修补特征，也没有已修补特征：版本不支持或特征码已变动！
                         var unsupportedState = new PatchStateInfo
                         {
@@ -294,6 +356,22 @@ namespace FuckCalibri.Services
             finally
             {
                 WinApi.CloseHandle(processHandle);
+            }
+        }
+
+        private static bool IsProcessTerminatingOrExited(Process process)
+        {
+            try
+            {
+                if (process.HasExited) return true;
+                Thread.Sleep(50);
+                if (process.HasExited) return true;
+                var remaining = Process.GetProcessesByName(Constants.TargetProcessName);
+                return remaining.Length == 0 || remaining.All(p => p.Id != process.Id);
+            }
+            catch
+            {
+                return true;
             }
         }
     }

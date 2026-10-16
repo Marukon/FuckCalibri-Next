@@ -368,6 +368,21 @@ namespace FuckCalibri
             // 同一 OneNote 实例的同一失败状态只弹窗一次，避免周期轮询时循环弹窗打扰
             if (state.ProcessId > 0 && (state.ProcessId != _lastAlertedFailurePid || state.Status != _lastAlertedFailureStatus))
             {
+                // 检查目标进程是否已退出。如果进程已不复存在，属于关闭退出的瞬态，不予弹窗
+                try
+                {
+                    using var proc = Process.GetProcessById(state.ProcessId);
+                    if (proc.HasExited)
+                    {
+                        return;
+                    }
+                }
+                catch
+                {
+                    // 进程已不存在
+                    return;
+                }
+
                 _lastAlertedFailurePid = state.ProcessId;
                 _lastAlertedFailureStatus = state.Status;
 
@@ -619,7 +634,7 @@ namespace FuckCalibri
 
         private void OnShowHelpClicked(object sender, RoutedEventArgs e)
         {
-            var helpText = "【关于 FuckCalibri.net v2.0】\n\n" +
+            var helpText = "【关于 FuckCalibri.net v2.0.1】\n\n" +
                            "1. 痛点：OneNote 硬编码了字体回退逻辑，输入中西文混排或数字标点时总会强制切回 Calibri 字体。\n" +
                            "2. 原理：本工具对 onmain.dll 内存中的特征码进行动态掩码覆写，关闭强制回退分支，还原您自选设定的全局中西文字体。\n" +
                            "3. 方案 A：通过 Windows 窗口事件毫秒级捕获 OneNote，零后台轮询开销 (推荐)。\n" +

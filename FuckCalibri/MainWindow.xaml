@@ -13,6 +13,12 @@
                   Background="#F1F5F9"
                   ExtendsContentIntoTitleBar="True">
 
+    <ui:FluentWindow.Resources>
+        <BitmapImage x:Key="TrayIcon_gray" UriSource="pack://application:,,,/Resources/fuckcalibri-gray.ico" />
+        <BitmapImage x:Key="TrayIcon_green" UriSource="pack://application:,,,/Resources/fuckcalibri-green.ico" />
+        <BitmapImage x:Key="TrayIcon_blue" UriSource="pack://application:,,,/Resources/fuckcalibri-blue.ico" />
+    </ui:FluentWindow.Resources>
+
     <Grid Background="#F1F5F9">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -27,7 +33,7 @@
 
         <!-- 任务栏托盘图标 -->
         <tb:TaskbarIcon x:Name="TrayIcon"
-                        IconSource="pack://application:,,,/Resources/fuckcalibri-gray.ico"
+                        IconSource="{StaticResource TrayIcon_gray}"
                         ToolTipText="FuckCalibri.net - OneNote Calibri 拦截工具"
                         TrayMouseDoubleClick="OnTrayDoubleClicked"
                         TrayLeftMouseDown="OnTrayLeftMouseDown">
@@ -267,7 +273,7 @@
                                                FontSize="13"
                                                FontWeight="SemiBold"
                                                Foreground="#0F172A" />
-                                    <TextBlock Text="基于 Win32 ShellHook 监听 OneNote 窗体创建，启动瞬间毫秒级自动触发，平时零后台开销。"
+                                    <TextBlock Text="监听 OneNote 窗口事件，并每 15 秒复查一次运行状态。"
                                                FontSize="11"
                                                Foreground="#64748B"
                                                TextWrapping="Wrap"
@@ -477,11 +483,11 @@
                                            FontSize="11" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,3" />
                                 <TextBlock Text="• 架构优化：放弃 OneNote for Windows 10 (UWP) 支持，专精 OneNote 桌面版 (x64)。"
                                            FontSize="11" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,3" />
-                                <TextBlock Text="• 监控升级：引入 Win32 ShellHook 事件监听 (方案 A)，窗口激活瞬间毫秒级自动触发，平时零轮询零能耗。"
+                                <TextBlock Text="• 监控升级：引入 Win32 ShellHook 事件监听 (方案 A)，窗口激活时触发检测，后台每 15 秒复查一次。"
                                            FontSize="11" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,3" />
                                 <TextBlock Text="• 启动顺序解耦：支持任意启动时序，可随时在本程序内启动/唤醒 OneNote。"
                                            FontSize="11" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,3" />
-                                <TextBlock Text="• 轻量常驻：最小化至托盘时自动修剪工作集内存至 ~7MB，右键托盘菜单清晰易读。"
+                                <TextBlock Text="• 轻量常驻：窗口隐藏后仅更新托盘状态，再次打开时刷新界面。"
                                            FontSize="11" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,6" />
 
                                 <Rectangle Height="1" Fill="#E2E8F0" Margin="0,2,0,6" />
@@ -522,7 +528,7 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="TxtMemoryUsage"
-                               Text="内存: ~7 MB"
+                               Text="工作集: —"
                                FontSize="11"
                                Foreground="#64748B"
                                Margin="0,0,10,0" />

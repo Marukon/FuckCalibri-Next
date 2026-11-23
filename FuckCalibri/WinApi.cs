@@ -63,22 +63,5 @@ namespace FuckCalibri {
         public const int HSHELL_ACTIVATESHELLWINDOW = 3;
         public const int HSHELL_WINDOWACTIVATED = 4;
         public const int HSHELL_RUDEAPPACTIVATED = 0x8004;
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
-
-        /// <summary>
-        /// 最小化至托盘时主动压缩工作集内存，释放未使用的物理内存占用
-        /// </summary>
-        public static void TrimWorkingSet() {
-            try {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-                using var proc = System.Diagnostics.Process.GetCurrentProcess();
-                SetProcessWorkingSetSize(proc.Handle, (IntPtr)(-1), (IntPtr)(-1));
-            }
-            catch { }
-        }
     }
 }

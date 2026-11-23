@@ -7,7 +7,6 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using FuckCalibri.Models;
 using FuckCalibri.Services;
 using Wpf.Ui.Controls;
@@ -19,6 +18,9 @@ namespace FuckCalibri
         private readonly OnenoteMemoryPatcher _patcher;
         private readonly CancellationTokenSource _cts = new();
         private bool _isExplicitExit = false;
+
+        private PatchStateInfo? _pendingWindowState;
+        private string _trayColor = "gray";
 
         private uint _shellHookMsg = 0;
         private uint _taskbarCreatedMsg = 0;
@@ -33,6 +35,7 @@ namespace FuckCalibri
 
             Loaded += OnWindowLoaded;
             Closing += OnWindowClosing;
+            IsVisibleChanged += OnWindowVisibilityChanged;
             StateChanged += OnWindowStateChanged;
         }
 
@@ -113,8 +116,10 @@ namespace FuckCalibri
             // 强制创建系统托盘图标 (尤其在开机静默 /silent 启动未调用 Show() 时必须显式 ForceCreate)
             EnsureTrayIconCreated();
 
-            // 启动开机托盘图标守候保活任务 (防范开机阶段 Explorer 任务栏就绪延迟)
-            StartTrayIconKeepAlive();
+            if (!TrayIcon.IsCreated)
+            {
+                _ = RetryTrayIconAsync(_cts.Token);
+            }
 
             // 初始化自启动设置
             var autoStartEnabled = AutoStartManager.IsAutoStartEnabled();
@@ -128,23 +133,17 @@ namespace FuckCalibri
             var currentMode = AppSettings.MonitoringMode;
             UpdateSchemeVisual(currentMode);
 
-            // 更新当前内存占用显示
-            UpdateMemoryUsageDisplay();
-
-            // 启动后台持续监听任务
-            Task.Run(() => _patcher.StartAsync(_cts.Token));
-
-            // 初始立即扫描一次
-            _patcher.ScanAndPatchNow();
+            // StartAsync performs its first check before waiting for the next interval.
+            _ = Task.Run(() => _patcher.StartAsync(_cts.Token));
         }
 
         public void EnsureTrayIconCreated()
         {
             try
             {
-                if (!TrayIcon.IsCreated)
+                if (!_cts.IsCancellationRequested && !TrayIcon.IsCreated)
                 {
-                    TrayIcon.ForceCreate();
+                    TrayIcon.ForceCreate(enablesEfficiencyMode: false);
                 }
             }
             catch (Exception ex)
@@ -153,31 +152,20 @@ namespace FuckCalibri
             }
         }
 
-        private void StartTrayIconKeepAlive()
+        private async Task RetryTrayIconAsync(CancellationToken token)
         {
-            Task.Run(async () =>
+            try
             {
-                // 在启动初期重试若干次，应对开机阶段 Explorer.exe 托盘未就绪问题
-                for (int i = 0; i < 8; i++)
+                for (int attempt = 0; attempt < 8 && !TrayIcon.IsCreated; attempt++)
                 {
-                    await Task.Delay(1500);
-                    bool created = false;
-                    await Dispatcher.InvokeAsync(() =>
-                    {
-                        if (!TrayIcon.IsCreated)
-                        {
-                            try
-                            {
-                                TrayIcon.ForceCreate();
-                            }
-                            catch { }
-                        }
-                        created = TrayIcon.IsCreated;
-                    });
-
-                    if (created) break;
+                    await Task.Delay(1500, token);
+                    EnsureTrayIconCreated();
                 }
-            });
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // The window closed while waiting for Explorer.
+            }
         }
 
         private void OnWindowLoaded(object sender, RoutedEventArgs e)
@@ -190,8 +178,6 @@ namespace FuckCalibri
             if (WindowState == WindowState.Minimized && ChkMinimizeToTray.IsChecked == true)
             {
                 Hide();
-                WinApi.TrimWorkingSet();
-                UpdateMemoryUsageDisplay();
             }
         }
 
@@ -201,19 +187,30 @@ namespace FuckCalibri
             {
                 e.Cancel = true;
                 Hide();
-                // 窗口隐藏后主动修剪工作集内存
-                WinApi.TrimWorkingSet();
-                UpdateMemoryUsageDisplay();
             }
-            else
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _patcher.StateChanged -= OnPatcherStateChanged;
+            _cts.Cancel();
+            if (_hwnd != IntPtr.Zero)
             {
-                _cts.Cancel();
-                if (_hwnd != IntPtr.Zero)
-                {
-                    WinApi.DeregisterShellHookWindow(_hwnd);
-                }
-                TrayIcon.Dispose();
+                WinApi.DeregisterShellHookWindow(_hwnd);
             }
+            TrayIcon.Dispose();
+            base.OnClosed(e);
+        }
+
+        private void OnWindowVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (!IsVisible) return;
+            if (_pendingWindowState is { } state)
+            {
+                RenderWindowState(state);
+                _pendingWindowState = null;
+            }
+            UpdateMemoryUsageDisplay();
         }
 
         private void OnPatcherStateChanged(object? sender, PatchStateInfo state)
@@ -223,8 +220,31 @@ namespace FuckCalibri
 
         private void UpdateUiState(PatchStateInfo state)
         {
-            UpdateMemoryUsageDisplay();
+            if (_cts.IsCancellationRequested) return;
 
+            var (color, tooltip) = state.Status switch
+            {
+                PatchStatus.Patched => ("green", $"FuckCalibri.net - 已生效 (保护 {state.PatchedCount} 处特征)"),
+                PatchStatus.NotRunning => ("gray", "FuckCalibri.net - OneNote 未运行 (守候中)"),
+                PatchStatus.WaitingModule => ("gray", "FuckCalibri.net - 正在等待 OneNote 核心模块加载..."),
+                PatchStatus.Unsupported => ("blue", "FuckCalibri.net - 未匹配到特征码 (未生效)"),
+                _ => ("blue", "FuckCalibri.net - 检测遇到错误")
+            };
+            UpdateTrayVisual(color, tooltip);
+            if (IsVisible)
+            {
+                RenderWindowState(state);
+                UpdateMemoryUsageDisplay();
+            }
+            else
+            {
+                _pendingWindowState = state;
+            }
+            CheckAndAlertFailure(state);
+        }
+
+        private void RenderWindowState(PatchStateInfo state)
+        {
             switch (state.Status)
             {
                 case PatchStatus.Patched:
@@ -251,7 +271,6 @@ namespace FuckCalibri
                     DotStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(0x10, 0xB9, 0x81));
                     TxtBottomStatus.Text = $"守护就绪  OneNote 桌面版已受保护 (PID: {state.ProcessId})";
 
-                    UpdateTrayVisual("green", $"FuckCalibri.net - 已生效 (保护 {state.PatchedCount} 处特征)");
                     break;
 
                 case PatchStatus.NotRunning:
@@ -275,7 +294,6 @@ namespace FuckCalibri
                     DotStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(0x94, 0xA3, 0xB8));
                     TxtBottomStatus.Text = "待机中  等待 OneNote 启动";
 
-                    UpdateTrayVisual("gray", "FuckCalibri.net - OneNote 未运行 (守候中)");
                     break;
 
                 case PatchStatus.WaitingModule:
@@ -293,7 +311,6 @@ namespace FuckCalibri
 
                     DotStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(0xF5, 0x9E, 0x0B));
                     TxtBottomStatus.Text = $"正在检测  OneNote 正在加载 onmain.dll...";
-                    UpdateTrayVisual("gray", "FuckCalibri.net - 正在等待 OneNote 核心模块加载...");
                     break;
 
                 case PatchStatus.Unsupported:
@@ -319,7 +336,6 @@ namespace FuckCalibri
 
                     DotStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(0xF5, 0x9E, 0x0B));
                     TxtBottomStatus.Text = "未生效  未匹配到 OneNote 字体回退特征码";
-                    UpdateTrayVisual("blue", "FuckCalibri.net - 未匹配到特征码 (未生效)");
                     break;
 
                 case PatchStatus.AccessDenied:
@@ -338,12 +354,8 @@ namespace FuckCalibri
 
                     DotStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44));
                     TxtBottomStatus.Text = $"错误  {state.Message}";
-                    UpdateTrayVisual("blue", "FuckCalibri.net - 检测遇到错误");
                     break;
             }
-
-            // 若注入拦截失败，自动弹窗警示用户
-            CheckAndAlertFailure(state);
         }
 
         private int _lastAlertedFailurePid = 0;
@@ -431,42 +443,24 @@ namespace FuckCalibri
 
         private void UpdateTrayVisual(string iconColor, string tooltip)
         {
-            try
+            if (_trayColor != iconColor)
             {
-                TrayIcon.IconSource = new BitmapImage(new Uri($"pack://application:,,,/Resources/fuckcalibri-{iconColor}.ico"));
+                TrayIcon.IconSource = (ImageSource)FindResource("TrayIcon_" + iconColor);
+                _trayColor = iconColor;
             }
-            catch
+            if (TrayIcon.ToolTipText != tooltip)
             {
-                try
-                {
-                    var streamInfo = Application.GetResourceStream(new Uri($"pack://application:,,,/Resources/fuckcalibri-{iconColor}.ico"));
-                    if (streamInfo != null)
-                    {
-                        TrayIcon.Icon = new System.Drawing.Icon(streamInfo.Stream);
-                    }
-                }
-                catch { }
+                TrayIcon.ToolTipText = tooltip;
             }
-
-            TrayIcon.ToolTipText = tooltip;
-
-            if (!TrayIcon.IsCreated)
-            {
-                try
-                {
-                    TrayIcon.ForceCreate();
-                }
-                catch { }
-            }
+            EnsureTrayIconCreated();
         }
 
         private void UpdateMemoryUsageDisplay()
         {
             try
             {
-                using var proc = Process.GetCurrentProcess();
-                var mb = proc.WorkingSet64 / (1024.0 * 1024.0);
-                TxtMemoryUsage.Text = $"内存: {mb:F1} MB";
+                var mb = Environment.WorkingSet / (1024.0 * 1024.0);
+                TxtMemoryUsage.Text = $"工作集: {mb:F1} MB";
             }
             catch { }
         }
@@ -606,7 +600,6 @@ namespace FuckCalibri
             Topmost = true;
             Topmost = false;
             Focus();
-            UpdateMemoryUsageDisplay();
         }
 
         private void OnLaunchOneNoteClicked(object sender, RoutedEventArgs e)
@@ -617,8 +610,7 @@ namespace FuckCalibri
 
         private void OnRescanClicked(object sender, RoutedEventArgs e)
         {
-            var state = _patcher.ScanAndPatchNow();
-            UpdateUiState(state);
+            _patcher.ScanAndPatchNow();
         }
 
         private void OnCopyStatusClicked(object sender, RoutedEventArgs e)
@@ -637,9 +629,9 @@ namespace FuckCalibri
             var helpText = "【关于 FuckCalibri.net v2.0.1】\n\n" +
                            "1. 痛点：OneNote 硬编码了字体回退逻辑，输入中西文混排或数字标点时总会强制切回 Calibri 字体。\n" +
                            "2. 原理：本工具对 onmain.dll 内存中的特征码进行动态掩码覆写，关闭强制回退分支，还原您自选设定的全局中西文字体。\n" +
-                           "3. 方案 A：通过 Windows 窗口事件毫秒级捕获 OneNote，零后台轮询开销 (推荐)。\n" +
+                           "3. 方案 A：监听 OneNote 窗口事件，并每 15 秒复查一次 (推荐)。\n" +
                            "4. 方案 B：后台 1.5 秒低开销定时轮询进程快照。\n" +
-                           "5. 极致轻量：最小化至托盘时自动修剪工作集内存至 ~7MB。\n\n" +
+                           "5. 托盘模式：窗口隐藏期间仅更新托盘状态，重新打开时刷新界面。\n\n" +
                            "开源协议：MIT License";
             System.Windows.MessageBox.Show(helpText, "原理解析与使用帮助", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
         }
@@ -666,8 +658,6 @@ namespace FuckCalibri
             if (IsVisible)
             {
                 Hide();
-                WinApi.TrimWorkingSet();
-                UpdateMemoryUsageDisplay();
             }
             else
             {
@@ -678,10 +668,7 @@ namespace FuckCalibri
         private void OnExitAppClicked(object sender, RoutedEventArgs e)
         {
             _isExplicitExit = true;
-            _cts.Cancel();
-            TrayIcon.Dispose();
             Close();
-            Application.Current.Shutdown();
         }
 
         #endregion
